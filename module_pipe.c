@@ -2,12 +2,26 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 static int major;
 
-static int reader_ptr = 0, writer_ptr = 0;
+static char buffer[100];
+static buf_size = 100;
+static int reader_ptr = 0;
+static int writer_ptr = 0;
+static int free_bytes = 100;
 
-static char buffer[256];
+/*
+struct cycle_buffer
+{
+	static char buffer[100];
+	static buf_size = 100;
+	static int reader_ptr = 0;
+	static int writer_ptr = 0;
+	static int free_bytes = 100;
+};
+*/
 
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
@@ -15,23 +29,8 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 	char *tmp_buffer;
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
 
-	int i;
-
-	for(i = 0; i<count;i++)
-	{
-		tmp_buffer[i] = buffer[reader_ptr];
-		reader_ptr++;
-
-		if (reader_ptr == 256)
-		{
-			reader_ptr = 0;
-		}
-	}
-
 	copy_to_user(buf, tmp_buffer, count);
-
 	kfree(tmp_buffer);
-
 	return count;
 }
 
@@ -41,26 +40,23 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 	
 	char *tmp_buffer;
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
-
 	copy_from_user(tmp_buffer, buf, count);
-
 	pr_alert("%s\n", tmp_buffer);
 
 	int i;
-
 	for(i = 0; i<count;i++)
 	{
+
 		buffer[writer_ptr] = tmp_buffer[i];
 		writer_ptr++;
 
-		if (writer_ptr == 256)
+		if (writer_ptr == 100)
 		{
 			writer_ptr = 0;
 		}
 	}
 
 	kfree(tmp_buffer);
-
 	return count;
 }
 

@@ -3,9 +3,17 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
-int main()
+int main(int argc, char* argv[])
 {
+	if (argc < 2)
+	{
+		printf("There is not enought info about string.\n");
+		return -1;
+	}
+
 	int reader = open("/dev/module_pipe", O_RDONLY);
 	if (reader == -1)
 	{
@@ -14,12 +22,15 @@ int main()
 	}
 	printf("Success.\n");
 
-	char buf[50];
+	int bytes = atoi(argv[1]);
+	char *str;
+	str = malloc(bytes);
 
-	int read_bytes = read(reader, buf, 21);
+	int read_bytes = read(reader, str, bytes);
 	printf("Successfully read %d bytes.\n", read_bytes);
 
-	printf("%s",buf);
+	printf("%s",str);
+	free(str);
 
 	close(reader);
 	printf("Closed file.\n");
