@@ -55,24 +55,27 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		{
 			read_can = read_left;
 		}
-
-		if (read_can + reader_ptr > buf_size) //Если при считывании выходим за границы буфера
+		if (read_can > free_bytes)
 		{
-			memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), buf_size-reader_ptr-1); //Считываем сколько можем до конца буффера
-			printk("%d\n",buf_size-reader_ptr-1);
+			read_can = free_bytes;
+		}
 
-			read_left -= buf_size-reader_ptr+1;
-			read_can -= buf_size-reader_ptr+1;
-			free_bytes += buf_size-reader_ptr+1;
+		if (read_can + reader_ptr > buf_size-1) //Если при считывании выходим за границы буфера
+		{
+			memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), buf_size-reader_ptr); //Считываем сколько можем до конца буффера
+
+			read_left -= buf_size-reader_ptr;
+			read_can -= buf_size-reader_ptr;
+			free_bytes += buf_size-reader_ptr;
 			reader_ptr = 0;
 		}
 
 		memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), read_can);
-		printk("%d\n",read_can);
 		read_left -= read_can;
 		free_bytes += read_can;
 		reader_ptr += read_can;
 		read_can = 0;
+		printk("%s\n",tmp_buffer);
 		
 	}
 
@@ -107,9 +110,11 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			write_bytes = free_bytes;
 		}
 
+		printk("%d\n", write_bytes);
+
 		if (writer_ptr+write_bytes>buf_size-1)
 		{
-			int ov_size = buf_size - writer_ptr - 1;
+			int ov_size = buf_size - writer_ptr;
 			memcpy(buffer+writer_ptr, tmp_buffer, ov_size);
 			writer_ptr = 0;
 			write_bytes -= ov_size;
@@ -122,6 +127,12 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		free_bytes -= write_bytes;
 		write_left -= write_bytes;
 		writer_ptr += write_bytes;
+		if (writer_ptr == buf_size)
+		{
+			writer_ptr = 0;
+		} 
+		printk("%d\n",free_bytes);
+		printk("%s\n",buffer);
 		write_bytes = 0;
 	}
 
