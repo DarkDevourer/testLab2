@@ -37,14 +37,14 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		if (free_bytes == buf_size)
 		{
 			wake_up(&module_queue);
-			wait_event_interruptible(module_queue, free_bytes != 0);
+			wait_event_interruptible(module_queue, free_bytes < buf_size);
 		}
 
 		int read_can; //Сколько мы можем считать байт в данной итерации цикла
 
 		if (reader_ptr >= writer_ptr)
 		{
-			read_can = 10 + writer_ptr - reader_ptr;
+			read_can = buf_size + writer_ptr - reader_ptr;
 		}
 		else
 		{
@@ -57,7 +57,7 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 
 		if (reader_ptr + read_can > buf_size-1) //Если при считывании выходим за границы буфера
 		{
-			memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), buf_size-reader_ptr); //Считываем сколько можем до конца буффера
+			memcpy(tmp_buffer+(count-read_left), buffer+reader_ptr, buf_size-reader_ptr); //Считываем сколько можем до конца буффера
 
 			read_left -= buf_size-reader_ptr;
 			read_can -= buf_size-reader_ptr;
@@ -65,13 +65,15 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 			reader_ptr = 0;
 		}
 
-		memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), read_can);
+		memcpy(tmp_buffer+(count-read_left), buffer+reader_ptr, read_can);
 		read_left -= read_can;
 		free_bytes += read_can;
 		reader_ptr += read_can;
 		read_can = 0;
 		printk("%s\n",tmp_buffer);
-		
+		printk("%d\n",reader_ptr);
+		printk("%d\n",free_bytes);
+
 	}
 
 	wake_up(&module_queue);
