@@ -22,12 +22,12 @@ int main(int argc, char* argv[])
 	}
 	printf("Success.\n");
 
-	int bytes = atoi(argv[2])+1;
+	int bytes = atoi(argv[2]);
 
 	char *str;
 	str = malloc(bytes);
 
-	memcpy(str, argv[1], bytes-1);
+	memcpy(str, argv[1], bytes);
 	write(writer, str, bytes);
 	printf("Successfully wrote %d bytes.", bytes);
 	free(str);

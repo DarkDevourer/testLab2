@@ -42,7 +42,7 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 
 		int read_can; //Сколько мы можем считать байт в данной итерации цикла
 
-		if (reader_ptr > writer_ptr)
+		if (reader_ptr >= writer_ptr)
 		{
 			read_can = 10 + writer_ptr - reader_ptr;
 		}
@@ -50,17 +50,12 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		{
 			read_can = writer_ptr - reader_ptr;
 		}
-
 		if (read_can > read_left)
 		{
 			read_can = read_left;
 		}
-		if (read_can > free_bytes)
-		{
-			read_can = free_bytes;
-		}
 
-		if (read_can + reader_ptr > buf_size-1) //Если при считывании выходим за границы буфера
+		if (reader_ptr + read_can > buf_size-1) //Если при считывании выходим за границы буфера
 		{
 			memcpy(tmp_buffer+reader_ptr, buffer+(count-read_left), buf_size-reader_ptr); //Считываем сколько можем до конца буффера
 
@@ -114,8 +109,8 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 		if (writer_ptr+write_bytes>buf_size-1)
 		{
-			int ov_size = buf_size - writer_ptr;
-			memcpy(buffer+writer_ptr, tmp_buffer, ov_size);
+			int ov_size = buf_size - writer_ptr; //Сколько байт можно записать до конца буфера
+			memcpy(buffer+writer_ptr, tmp_buffer+(count-write_left), ov_size);
 			writer_ptr = 0;
 			write_bytes -= ov_size;
 			write_left -= ov_size;
@@ -126,11 +121,7 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 		free_bytes -= write_bytes;
 		write_left -= write_bytes;
-		writer_ptr += write_bytes;
-		if (writer_ptr == buf_size)
-		{
-			writer_ptr = 0;
-		} 
+		writer_ptr += write_bytes; 
 		printk("%d\n",free_bytes);
 		printk("%s\n",buffer);
 		write_bytes = 0;

@@ -29,7 +29,7 @@ int main(int argc, char* argv[])
 	int read_bytes = read(reader, str, bytes);
 	printf("Successfully read %d bytes.\n", read_bytes);
 
-	printf("%s",str);
+	printf("%s\n",str);
 	free(str);
 
 	close(reader);
