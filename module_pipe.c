@@ -6,24 +6,51 @@
 
 static int major;
 
-static char buffer[10];
-static int buf_size = 10;
-static int reader_ptr = 0;
-static int writer_ptr = 0;
-static int free_bytes = 10;
 
 DECLARE_WAIT_QUEUE_HEAD(module_queue);
 
-/*
+
 struct cycle_buffer
 {
-	static char buffer[10];
-	static buf_size = 10;
-	static int reader_ptr = 0;
-	static int writer_ptr = 0;
-	static int free_bytes = 10;
+	char *buffer;
+	size_t buf_size;
+	ssize_t reader_ptr;
+	ssize_t writer_ptr;
+	ssize_t free_bytes;
 };
-*/
+
+static struct cycle_buffer *buffer;
+
+static struct cycle_buffer *allocate_buffer (ssize_t begin_size)
+{
+	struct cycle_buffer *buffer;
+
+	buffer = kmalloc(sizeof(struct cycle_buffer), GFP_KERNEL);
+	if (buffer == NULL)
+	{
+		return NULL;
+	}
+
+	buffer->buf_size = begin_size;
+	buffer->buffer = kmalloc(begin_size, GFP_KERNEL);
+	if (buffer->buffer == NULL)
+	{
+		kfree(buffer);
+		return NULL;
+	}
+
+	buffer->reader_ptr = 0;
+	buffer->writer_ptr = 0;
+	buffer->free_bytes = begin_size;
+	return buffer;
+}
+
+static void free_buffer(struct cycle_buffer *buffer)
+{
+	kfree(buffer->buffer);
+	kfree(buffer);
+}
+
 
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
@@ -34,45 +61,45 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 
 	while (read_left > 0)
 	{
-		if (free_bytes == buf_size)
+		if (buffer->free_bytes == buffer->buf_size)
 		{
 			wake_up(&module_queue);
-			wait_event_interruptible(module_queue, free_bytes < buf_size);
+			wait_event_interruptible(module_queue, buffer->free_bytes < buffer->buf_size);
 		}
 
 		int read_can; //Сколько мы можем считать байт в данной итерации цикла
 
-		if (reader_ptr >= writer_ptr)
+		if (buffer->reader_ptr >= buffer->writer_ptr)
 		{
-			read_can = buf_size + writer_ptr - reader_ptr;
+			read_can = buffer->buf_size + buffer->writer_ptr - buffer->reader_ptr;
 		}
 		else
 		{
-			read_can = writer_ptr - reader_ptr;
+			read_can = buffer->writer_ptr - buffer->reader_ptr;
 		}
 		if (read_can > read_left)
 		{
 			read_can = read_left;
 		}
 
-		if (reader_ptr + read_can > buf_size-1) //Если при считывании выходим за границы буфера
+		if (buffer->reader_ptr + read_can > buffer->buf_size-1) //Если при считывании выходим за границы буфера
 		{
-			memcpy(tmp_buffer+(count-read_left), buffer+reader_ptr, buf_size-reader_ptr); //Считываем сколько можем до конца буффера
+			memcpy(tmp_buffer+(count-read_left), buffer->buffer+buffer->reader_ptr, buffer->buf_size-buffer->reader_ptr); //Считываем сколько можем до конца буффера
 
-			read_left -= buf_size-reader_ptr;
-			read_can -= buf_size-reader_ptr;
-			free_bytes += buf_size-reader_ptr;
-			reader_ptr = 0;
+			read_left -= buffer->buf_size-buffer->reader_ptr;
+			read_can -= buffer->buf_size-buffer->reader_ptr;
+			buffer->free_bytes += buffer->buf_size-buffer->reader_ptr;
+			buffer->reader_ptr = 0;
 		}
 
-		memcpy(tmp_buffer+(count-read_left), buffer+reader_ptr, read_can);
+		memcpy(tmp_buffer+(count-read_left), buffer->buffer+buffer->reader_ptr, read_can);
 		read_left -= read_can;
-		free_bytes += read_can;
-		reader_ptr += read_can;
+		buffer->free_bytes += read_can;
+		buffer->reader_ptr += read_can;
 		read_can = 0;
 		printk("%s\n",tmp_buffer);
-		printk("%d\n",reader_ptr);
-		printk("%d\n",free_bytes);
+		printk("%d\n",buffer->reader_ptr);
+		printk("%d\n",buffer->free_bytes);
 
 	}
 
@@ -95,37 +122,37 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 	while (write_left > 0)
 	{
-		if (free_bytes == 0)
+		if (buffer->free_bytes == 0)
 		{
 			wake_up(&module_queue);
-			wait_event_interruptible(module_queue, free_bytes > 0);
+			wait_event_interruptible(module_queue, buffer->free_bytes > 0);
 		}
 
 		int write_bytes = write_left;
-		if (write_left > free_bytes)
+		if (write_left > buffer->free_bytes)
 		{
-			write_bytes = free_bytes;
+			write_bytes = buffer->free_bytes;
 		}
 
 		printk("%d\n", write_bytes);
 
-		if (writer_ptr+write_bytes>buf_size-1)
+		if (buffer->writer_ptr+write_bytes>buffer->buf_size-1)
 		{
-			int ov_size = buf_size - writer_ptr; //Сколько байт можно записать до конца буфера
-			memcpy(buffer+writer_ptr, tmp_buffer+(count-write_left), ov_size);
-			writer_ptr = 0;
+			int ov_size = buffer->buf_size - buffer->writer_ptr; //Сколько байт можно записать до конца буфера
+			memcpy(buffer->buffer+buffer->writer_ptr, tmp_buffer+(count-write_left), ov_size);
+			buffer->writer_ptr = 0;
 			write_bytes -= ov_size;
 			write_left -= ov_size;
-			free_bytes -= ov_size;
+			buffer->free_bytes -= ov_size;
 		}
 
-		memcpy(buffer+writer_ptr, tmp_buffer+(count-write_left), write_bytes);
+		memcpy(buffer->buffer+buffer->writer_ptr, tmp_buffer+(count-write_left), write_bytes);
 
-		free_bytes -= write_bytes;
+		buffer->free_bytes -= write_bytes;
 		write_left -= write_bytes;
-		writer_ptr += write_bytes; 
-		printk("%d\n",free_bytes);
-		printk("%s\n",buffer);
+		buffer->writer_ptr += write_bytes; 
+		printk("%d\n",buffer->free_bytes);
+		printk("%s\n",buffer->buffer);
 		write_bytes = 0;
 	}
 
@@ -163,6 +190,9 @@ static int __init mod_init(void)
 		/* should follow 0/-E convention ... */
 		return major;
 	}
+
+	buffer = allocate_buffer(100);
+
 	printk("/dev/lab2_device assigned major %d\n", major);
 	return 0;
 }
