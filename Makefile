@@ -13,3 +13,17 @@ writer:
 
 reader:
 	gcc -o reader readproc.c
+
+ioctl:
+	rm ioctl
+	gcc -o ioctl ioctl.c
+
+load:
+	sudo mknod /dev/module_pipe c 248 0
+	sudo chmod 777 /dev/module_pipe
+	sudo insmod module_pipe.ko
+
+reload:
+	sudo rmmod module_pipe
+	sudo dmesg -C
+	sudo insmod module_pipe.ko

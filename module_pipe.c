@@ -3,12 +3,15 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/wait.h>
+#include <linux/mutex.h>
+#include <linux/types.h>
+
+#include <uapi/asm-generic/ioctl.h>
+
+#include "module_pipe.h"
 
 static int major;
-
-
-DECLARE_WAIT_QUEUE_HEAD(module_queue);
-
 
 struct cycle_buffer
 {
@@ -17,6 +20,8 @@ struct cycle_buffer
 	ssize_t reader_ptr;
 	ssize_t writer_ptr;
 	ssize_t free_bytes;
+	wait_queue_head_t module_queue;
+	struct mutex lock;
 };
 
 static struct cycle_buffer *buffer;
@@ -42,6 +47,8 @@ static struct cycle_buffer *allocate_buffer (ssize_t begin_size)
 	buffer->reader_ptr = 0;
 	buffer->writer_ptr = 0;
 	buffer->free_bytes = begin_size;
+	init_waitqueue_head(&buffer->module_queue);
+	mutex_init(&buffer->lock);
 	return buffer;
 }
 
@@ -61,10 +68,13 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 
 	while (read_left > 0)
 	{
+		mutex_lock(&buffer->lock);
 		if (buffer->free_bytes == buffer->buf_size)
 		{
-			wake_up(&module_queue);
-			wait_event_interruptible(module_queue, buffer->free_bytes < buffer->buf_size);
+			wake_up(&buffer->module_queue);
+			mutex_unlock(&buffer->lock);
+			wait_event_interruptible(buffer->module_queue, buffer->free_bytes < buffer->buf_size);
+			mutex_lock(&buffer->lock);
 		}
 
 		int read_can; //Сколько мы можем считать байт в данной итерации цикла
@@ -100,10 +110,10 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		printk("%s\n",tmp_buffer);
 		printk("%d\n",buffer->reader_ptr);
 		printk("%d\n",buffer->free_bytes);
-
+		mutex_unlock(&buffer->lock);
 	}
 
-	wake_up(&module_queue);
+	wake_up(&buffer->module_queue);
 
 	copy_to_user(buf, tmp_buffer, count);
 	kfree(tmp_buffer);
@@ -122,10 +132,13 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 	while (write_left > 0)
 	{
+		mutex_lock(&buffer->lock);
 		if (buffer->free_bytes == 0)
 		{
-			wake_up(&module_queue);
-			wait_event_interruptible(module_queue, buffer->free_bytes > 0);
+			wake_up(&buffer->module_queue);
+			mutex_unlock(&buffer->lock);
+			wait_event_interruptible(buffer->module_queue, buffer->free_bytes > 0);
+			mutex_lock(&buffer->lock);
 		}
 
 		int write_bytes = write_left;
@@ -154,9 +167,10 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		printk("%d\n",buffer->free_bytes);
 		printk("%s\n",buffer->buffer);
 		write_bytes = 0;
+		mutex_unlock(&buffer->lock);
 	}
 
-	wake_up(&module_queue);
+	wake_up(&buffer->module_queue);
 
 	kfree(tmp_buffer);
 	return count;
@@ -174,11 +188,54 @@ static int lab2_release(struct inode *i, struct file *f)
 	return 0;
 }
 
+static long lab2_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+{
+	struct cycle_buffer *temp;
+	int res;
+
+	pr_alert("my_pipe ioctl; cmd is %d, arg is %lu\n", cmd, arg);
+
+	switch (cmd) {
+	case BUF_CAPACITY:
+		pr_alert("cmd is BUF_CAPACITY\n");
+
+		if (buffer == NULL) {
+			pr_err("Could not allocate requested circular buffer in ioctl\n");
+			return -EINVAL;
+		}
+
+		res = mutex_lock_interruptible(&buffer->lock);
+		if (res != 0) {
+			pr_err("Mutex interrupted with return value %d\n", res);
+			return -EINVAL;
+		}
+
+		if (buffer->free_bytes < buffer->buf_size) {
+			pr_alert("Circular buffer is not empty, could not change capacity");
+			mutex_unlock(&buffer->lock);
+			return -EINVAL;
+		}
+
+		temp = allocate_buffer(arg);
+
+		free_buffer(buffer);
+		buffer = temp;
+		pr_alert("Buffer capacity changed to %lu\n", arg);
+		mutex_unlock(&buffer->lock);
+		return 0;
+
+	default:
+		pr_alert("cmd is unknown\n");
+		return -ENOTTY;
+	}
+}
+
 static struct file_operations fops = {
 	.read	= lab2_read,
 	.write	= lab2_write,
 	.open   = lab2_open,
 	.release  = lab2_release,
+	.unlocked_ioctl = lab2_ioctl,
 };
 
 static int __init mod_init(void)

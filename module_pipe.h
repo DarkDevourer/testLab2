@@ -1,0 +1,2 @@
+#define SPECIAL_NUMBER 'n'
+#define BUF_CAPACITY _IOW(SPECIAL_NUMBER, 1, int)
