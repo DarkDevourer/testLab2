@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
+
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -23,8 +26,7 @@ static int gid_cmp(const void *_a, const void *_b)
 	return gid_gt(a, b) - gid_lt(a, b);
 }
 
-struct cycle_buffer
-{
+struct cycle_buffer {
 	char *buffer;
 	size_t buf_size;
 	ssize_t reader_ptr;
@@ -34,8 +36,7 @@ struct cycle_buffer
 	struct mutex lock;
 };
 
-struct buff_array
-{
+struct buff_array {
 	size_t n;
 	struct cycle_buffer **buf_arr;
 	kgid_t *gid_arr;
@@ -43,20 +44,17 @@ struct buff_array
 
 static struct buff_array *buffers;
 
-static struct cycle_buffer *allocate_buffer (ssize_t begin_size)
+static struct cycle_buffer *allocate_buffer(ssize_t begin_size)
 {
 	struct cycle_buffer *buffer;
 
 	buffer = kmalloc(sizeof(struct cycle_buffer), GFP_KERNEL);
 	if (buffer == NULL)
-	{
 		return NULL;
-	}
 
 	buffer->buf_size = begin_size;
 	buffer->buffer = kmalloc(begin_size, GFP_KERNEL);
-	if (buffer->buffer == NULL)
-	{
+	if (buffer->buffer == NULL) {
 		kfree(buffer);
 		return NULL;
 	}
@@ -81,9 +79,8 @@ static struct buff_array *allocate_buff_array(void)
 
 	arr = kmalloc(sizeof(struct buff_array), GFP_KERNEL);
 	if (arr == NULL)
-	{
 		return NULL;
-	}
+
 	arr->n = 0;
 	arr->buf_arr = NULL;
 	arr->gid_arr = NULL;
@@ -93,10 +90,9 @@ static struct buff_array *allocate_buff_array(void)
 static void free_buff_array(void)
 {
 	int i;
-	for (i=0; i<buffers->n; i++)
-	{
+
+	for (i = 0; i < buffers->n; i++)
 		free_buffer(buffers->buf_arr[i]);
-	}
 
 	kfree(buffers->buf_arr);
 	kfree(buffers->gid_arr);
@@ -149,14 +145,13 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
 
 	char *tmp_buffer;
+
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
 	int read_left = count; //Cколько осталось считать байт
 
-	while (read_left > 0)
-	{
+	while (read_left > 0) {
 		mutex_lock_interruptible(&buffer->lock);
-		if (buffer->free_bytes == buffer->buf_size)
-		{
+		if (buffer->free_bytes == buffer->buf_size) {
 			wake_up(&buffer->module_queue);
 			mutex_unlock(&buffer->lock);
 			wait_event_interruptible(buffer->module_queue, buffer->free_bytes < buffer->buf_size);
@@ -166,20 +161,14 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		int read_can; //Сколько мы можем считать байт в данной итерации цикла
 
 		if (buffer->reader_ptr >= buffer->writer_ptr)
-		{
 			read_can = buffer->buf_size + buffer->writer_ptr - buffer->reader_ptr;
-		}
 		else
-		{
 			read_can = buffer->writer_ptr - buffer->reader_ptr;
-		}
-		if (read_can > read_left)
-		{
-			read_can = read_left;
-		}
 
-		if (buffer->reader_ptr + read_can > buffer->buf_size-1) //Если при считывании выходим за границы буфера
-		{
+		if (read_can > read_left)
+			read_can = read_left;
+
+		if (buffer->reader_ptr + read_can > buffer->buf_size-1) {
 			memcpy(tmp_buffer+(count-read_left), buffer->buffer+buffer->reader_ptr, buffer->buf_size-buffer->reader_ptr); //Считываем сколько можем до конца буффера
 
 			read_left -= buffer->buf_size-buffer->reader_ptr;
@@ -193,9 +182,9 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		buffer->free_bytes += read_can;
 		buffer->reader_ptr += read_can;
 		read_can = 0;
-		printk("%s\n",tmp_buffer);
-		printk("%d\n",buffer->reader_ptr);
-		printk("%d\n",buffer->free_bytes);
+		pr_alert("%s\n", tmp_buffer);
+		pr_alert("%d\n", buffer->reader_ptr);
+		pr_alert("%d\n", buffer->free_bytes);
 		mutex_unlock(&buffer->lock);
 	}
 
@@ -210,18 +199,16 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
 	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
-	
 	char *tmp_buffer;
+
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
 	copy_from_user(tmp_buffer, buf, count);
 	pr_alert("%s\n", tmp_buffer);
 	int write_left = count;
 
-	while (write_left > 0)
-	{
+	while (write_left > 0) {
 		mutex_lock_interruptible(&buffer->lock);
-		if (buffer->free_bytes == 0)
-		{
+		if (buffer->free_bytes == 0) {
 			wake_up(&buffer->module_queue);
 			mutex_unlock(&buffer->lock);
 			wait_event_interruptible(buffer->module_queue, buffer->free_bytes > 0);
@@ -229,16 +216,15 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		}
 
 		int write_bytes = write_left;
+
 		if (write_left > buffer->free_bytes)
-		{
 			write_bytes = buffer->free_bytes;
-		}
 
-		printk("%d\n", write_bytes);
+		pr_alert("%d\n", write_bytes);
 
-		if (buffer->writer_ptr+write_bytes>buffer->buf_size-1)
-		{
+		if (buffer->writer_ptr+write_bytes > buffer->buf_size-1) {
 			int ov_size = buffer->buf_size - buffer->writer_ptr; //Сколько байт можно записать до конца буфера
+
 			memcpy(buffer->buffer+buffer->writer_ptr, tmp_buffer+(count-write_left), ov_size);
 			buffer->writer_ptr = 0;
 			write_bytes -= ov_size;
@@ -247,12 +233,11 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		}
 
 		memcpy(buffer->buffer+buffer->writer_ptr, tmp_buffer+(count-write_left), write_bytes);
-
 		buffer->free_bytes -= write_bytes;
 		write_left -= write_bytes;
-		buffer->writer_ptr += write_bytes; 
-		printk("%d\n",buffer->free_bytes);
-		printk("%s\n",buffer->buffer);
+		buffer->writer_ptr += write_bytes;
+		pr_alert("%d\n", buffer->free_bytes);
+		pr_alert("%s\n", buffer->buffer);
 		write_bytes = 0;
 		mutex_unlock(&buffer->lock);
 	}
@@ -266,18 +251,17 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 static int lab2_open(struct inode *i, struct file *file)
 {
 	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
-	if (buffer == NULL)
-	{
-		add_buffer(file->f_cred->egid);
-	}
 
-	printk("Just open\n");
+	if (buffer == NULL)
+		add_buffer(file->f_cred->egid);
+
+	pr_alert("Just open\n");
 	return 0;
 }
 
 static int lab2_release(struct inode *i, struct file *f)
 {
-	printk("Just close\n");
+	pr_alert("Just close\n");
 	return 0;
 }
 
@@ -310,15 +294,11 @@ static long lab2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		temp = allocate_buffer(arg);
 
 			for (i = 0; i < buffers->n; i++)
-			{
-				if (buffers->buf_arr[i] == buffer)
-				{
+				if (buffers->buf_arr[i] == buffer) {
 					buffers->buf_arr[i] = temp;
 					free_buffer(buffer);
 				}
-			}
 
-		
 		pr_alert("Buffer capacity changed to %lu\n", arg);
 		mutex_unlock(&buffer->lock);
 		return 0;
@@ -329,7 +309,7 @@ static long lab2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 }
 
-static struct file_operations fops = {
+static const struct file_operations fops = {
 	.read	= lab2_read,
 	.write	= lab2_write,
 	.open   = lab2_open,
@@ -342,14 +322,14 @@ static int __init mod_init(void)
 	/* 0 is ? */
 	major = register_chrdev(0, "lab2_device", &fops);
 	if (major < 0) {
-		printk("failed to register_chrdev failed with %d\n", major);
+		pr_alert("failed to register_chrdev failed with %d\n", major);
 		/* should follow 0/-E convention ... */
 		return major;
 	}
 
 	buffers = allocate_buff_array();
 
-	printk("/dev/lab2_device assigned major %d\n", major);
+	pr_alert("/dev/lab2_device assigned major %d\n", major);
 	return 0;
 }
 
@@ -357,7 +337,7 @@ static void __exit mod_exit(void)
 {
 	free_buff_array();
 	unregister_chrdev(major, "lab2_device");
-	printk("Exited\n");
+	pr_alert("Exited\n");
 }
 
 module_init(mod_init);
