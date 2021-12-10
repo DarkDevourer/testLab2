@@ -14,6 +14,8 @@
 
 #include "module_pipe.h"
 
+DEFINE_MUTEX(global_mutex);
+
 static int major;
 
 const size_t BUF_SIZE = 20;
@@ -77,13 +79,18 @@ static struct buff_array *allocate_buff_array(void)
 {
 	struct buff_array *arr;
 
+	mutex_lock_interruptible(&global_mutex);
+
 	arr = kmalloc(sizeof(struct buff_array), GFP_KERNEL);
-	if (arr == NULL)
+	if (arr == NULL) {
+		mutex_unlock(&global_mutex);
 		return NULL;
+	}
 
 	arr->n = 0;
 	arr->buf_arr = NULL;
 	arr->gid_arr = NULL;
+	mutex_unlock(&global_mutex);
 	return arr;
 }
 
@@ -91,28 +98,34 @@ static void free_buff_array(void)
 {
 	int i;
 
+	mutex_lock_interruptible(&global_mutex);
 	for (i = 0; i < buffers->n; i++)
 		free_buffer(buffers->buf_arr[i]);
 
 	kfree(buffers->buf_arr);
 	kfree(buffers->gid_arr);
 	kfree(buffers);
+	mutex_unlock(&global_mutex);
 }
 
 static struct cycle_buffer *add_buffer(kgid_t gid)
 {
 	struct cycle_buffer **tmp_buf_arr;
 	kgid_t *tmp_gid_arr;
+
+	mutex_lock_interruptible(&global_mutex);
 	size_t nsize = ((buffers->n) + 1);
 
 	tmp_buf_arr = krealloc(buffers->buf_arr, nsize * sizeof(struct cycle_buffer *), GFP_KERNEL);
 	if (tmp_buf_arr == NULL) {
+		mutex_unlock(&global_mutex);
 		pr_err("Could not reallocate memory for assoc_arr_gid_buf_t->buf_arr\n");
 		return NULL;
 	}
 
 	tmp_gid_arr = krealloc(buffers->gid_arr, nsize * sizeof(kgid_t), GFP_KERNEL);
 	if (tmp_gid_arr == NULL) {
+		mutex_unlock(&global_mutex);
 		pr_err("Could not reallocate memory for assoc_arr_gid_buf_t->tmp_gid_arr\n");
 		return NULL;
 	}
@@ -123,6 +136,7 @@ static struct cycle_buffer *add_buffer(kgid_t gid)
 	buffers->buf_arr = tmp_buf_arr;
 	buffers->gid_arr = tmp_gid_arr;
 	buffers->n++;
+	mutex_unlock(&global_mutex);
 	return buffers->buf_arr[nsize-1];
 }
 
@@ -142,12 +156,15 @@ static struct cycle_buffer *find_buffer(kgid_t gid)
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
+	struct cycle_buffer *buffer = file->private_data;
 
 	char *tmp_buffer;
 
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
 	int read_left = count; //Cколько осталось считать байт
+
+	if (tmp_buffer == NULL)
+		return 0;
 
 	while (read_left > 0) {
 		mutex_lock_interruptible(&buffer->lock);
@@ -178,14 +195,14 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		}
 
 		memcpy(tmp_buffer+(count-read_left), buffer->buffer+buffer->reader_ptr, read_can);
-		read_left -= read_can;
 		buffer->free_bytes += read_can;
 		buffer->reader_ptr += read_can;
+		pr_alert("%d\n", buffer->free_bytes);
+		mutex_unlock(&buffer->lock);
+		read_left -= read_can;
 		read_can = 0;
 		pr_alert("%s\n", tmp_buffer);
 		pr_alert("%d\n", buffer->reader_ptr);
-		pr_alert("%d\n", buffer->free_bytes);
-		mutex_unlock(&buffer->lock);
 	}
 
 	wake_up(&buffer->module_queue);
@@ -198,10 +215,14 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
+	struct cycle_buffer *buffer = file->private_data;
 	char *tmp_buffer;
 
 	tmp_buffer = kmalloc(count, GFP_KERNEL);
+
+	if (tmp_buffer == NULL)
+		return 0;
+
 	copy_from_user(tmp_buffer, buf, count);
 	pr_alert("%s\n", tmp_buffer);
 	int write_left = count;
@@ -234,12 +255,12 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 		memcpy(buffer->buffer+buffer->writer_ptr, tmp_buffer+(count-write_left), write_bytes);
 		buffer->free_bytes -= write_bytes;
-		write_left -= write_bytes;
 		buffer->writer_ptr += write_bytes;
+		mutex_unlock(&buffer->lock);
+		write_left -= write_bytes;
 		pr_alert("%d\n", buffer->free_bytes);
 		pr_alert("%s\n", buffer->buffer);
 		write_bytes = 0;
-		mutex_unlock(&buffer->lock);
 	}
 
 	wake_up(&buffer->module_queue);
@@ -250,10 +271,13 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 static int lab2_open(struct inode *i, struct file *file)
 {
-	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
+	file->private_data = find_buffer(file->f_cred->egid);
 
-	if (buffer == NULL)
-		add_buffer(file->f_cred->egid);
+	if (file->private_data == NULL)
+		file->private_data = add_buffer(file->f_cred->egid);
+
+	if (file->private_data == NULL)
+		return -1;
 
 	pr_alert("Just open\n");
 	return 0;
@@ -272,7 +296,7 @@ static long lab2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	pr_alert("my_pipe ioctl; cmd is %d, arg is %lu\n", cmd, arg);
 
-	struct cycle_buffer *buffer = find_buffer(file->f_cred->egid);
+	struct cycle_buffer *buffer = file->private_data;
 
 	switch (cmd) {
 	case BUF_CAPACITY:
@@ -286,21 +310,26 @@ static long lab2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		res = mutex_lock_interruptible(&buffer->lock);
 
 		if (buffer->free_bytes < buffer->buf_size) {
-			pr_alert("Circular buffer is not empty, could not change capacity");
 			mutex_unlock(&buffer->lock);
+			pr_alert("Circular buffer is not empty, could not change capacity");
 			return -EINVAL;
 		}
 
 		temp = allocate_buffer(arg);
 
-			for (i = 0; i < buffers->n; i++)
-				if (buffers->buf_arr[i] == buffer) {
-					buffers->buf_arr[i] = temp;
-					free_buffer(buffer);
-				}
+		if (temp == NULL) {
+			mutex_unlock(&buffer->lock);
+			return -ENOTTY;
+		}
 
-		pr_alert("Buffer capacity changed to %lu\n", arg);
+		for (i = 0; i < buffers->n; i++)
+			if (buffers->buf_arr[i] == buffer) {
+				buffers->buf_arr[i] = temp;
+				free_buffer(buffer);
+			}
+
 		mutex_unlock(&buffer->lock);
+		pr_alert("Buffer capacity changed to %lu\n", arg);
 		return 0;
 
 	default:
@@ -328,6 +357,8 @@ static int __init mod_init(void)
 	}
 
 	buffers = allocate_buff_array();
+	if (buffers == NULL)
+		return -1;
 
 	pr_alert("/dev/lab2_device assigned major %d\n", major);
 	return 0;
